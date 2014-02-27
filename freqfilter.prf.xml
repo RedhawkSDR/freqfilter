@@ -19,6 +19,8 @@ program.  If not, see http://www.gnu.org/licenses/.
 -->
 <properties>
   <simplesequence id="a" mode="readwrite" type="float">
+    <description>&quot;a&quot; represents the &quot;IIR&quot; part 
+Set a = [1] for a purely FIR filter implementation</description>
     <values>
       <value>1.0</value>
     </values>
@@ -26,19 +28,20 @@ program.  If not, see http://www.gnu.org/licenses/.
     <action type="external"/>
   </simplesequence>
   <simple id="aCmplx" mode="readwrite" type="boolean">
+    <description>Should the coeficients in &quot;a&quot; be treated as complex values</description>
     <value>False</value>
     <kind kindtype="configure"/>
     <action type="external"/>
   </simple>
   <simple id="bCmplx" mode="readwrite" type="boolean">
+    <description>Should the coeficients in &quot;a&quot; be treated as complex values</description>
     <value>False</value>
     <kind kindtype="configure"/>
     <action type="external"/>
   </simple>
   <simplesequence id="b" mode="readwrite" type="float">
-    <description>This is an FIR Bandpass fiter with stopbands from 0 to .1*FS and .4*FS to .5*FS and a passband from .2*FS to .3*FS.  It was designed with the following python code
-> from scipy.signal import remez
-> taps = remez(8,[0,.1,.2,.3,.4,.5],[0,1,0])
+    <description>&quot;b&quot; represents the &quot;FIR&quot; part.
+Set b = [1] for a purely IIR filter implementation
 </description>
     <values>
       <value>0.09474881</value>
