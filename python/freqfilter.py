@@ -31,6 +31,34 @@ from scipy.signal import lfiltic, lfilter
 
 from freqfilter_base import * 
 
+class FilterState(object):
+    """Encapsolate the filter state here to make the filter scalable for multiple streamIDs
+    """
+    def __init__(self):
+        
+        self.zi=None
+        self.outputCmplx=None
+        self.lastX = []
+        self.lastY = []
+        self.updateFilter=True
+        self.inputCmplx=None
+        self.forceSriUpdate=True
+        
+    def _applyNewFilterChanges(self, a, b, stateCmplx):
+        """ apply filter changes 
+        """
+        #set up the initial conditions based up on our filters and our history
+        self.zi = lfiltic(b,a,self.lastY, self.lastX)
+        
+        oldOutputCmplx = self.outputCmplx
+        #if the taps are complex or the initial condition is complex we will be complex
+        if stateCmplx:
+            self.outputCmplx = True  
+        #if we are changing between real and complex modes force an sri update to reflect this 
+        if (oldOutputCmplx != self.outputCmplx):
+            self.forceSriUpdate = True
+        self.updateFilter=False
+
 class freqfilter_i(freqfilter_base):
     """Freq filter implements a direct form 2 FIR/IIR real or complex tap filter leveraging scipy.signal lfilter.
        Please see scipy for complete documentation
@@ -53,14 +81,8 @@ class freqfilter_i(freqfilter_base):
         This is called by the framework immediately after your component registers with the NameService.
         """
         freqfilter_base.initialize(self)
-        self.updateFilter = True
-        self.zi=None
-        self.outputCmplx=None
-        self.lastX = []
-        self.lastY = []
-        self.inputCmplx=None
-        self.forceSriUpdate=True
-        self.streamID = None
+        self.state={}
+        self._rebuildFilter()
     
     def _isCmpxl(self, vec):
         """Check to see if there is any substantial imaginary component left in the vector
@@ -87,17 +109,6 @@ class freqfilter_i(freqfilter_base):
             self._b = self._convertCmplx(self.b)
         else:
             self._b = self.b
-        #set up the initial conditions based up on our filters and our history
-        self.zi = lfiltic(self._b,self._a,self.lastY, self.lastX)
-        
-        oldOutputCmplx = self.outputCmplx
-        #if the taps are complex or the initial condition is complex we will be complex
-        if self.aCmplx or self.bCmplx:
-            self.outputCmplx = True  
-        #if we are changing between real and complex modes force an sri update to reflect this 
-        if (oldOutputCmplx != self.outputCmplx):
-            self.forceSriUpdate = True
-        self.updateFilter=False
         
     def _convertCmplx(self, input):
         """Convert a real list into a python complex list of 1/2 the size
@@ -110,12 +121,13 @@ class freqfilter_i(freqfilter_base):
     def _updateSRI(self, sri):
         """Update the sri as appropriate and send out an sri packet
         """
-        self.inputCmplx = (sri.mode==1)
-        if self.inputCmplx:
-            self.outputCmplx = True
-        if self.outputCmplx:
+        state = self.state[sri.streamID]
+        state.inputCmplx = (sri.mode==1)
+        if state.inputCmplx:
+            state.outputCmplx = True
+        if state.outputCmplx:
             sri.mode=1
-        self.forceSriUpdate=False
+        state.forceSriUpdate=False
         self.port_dataFloat_out.pushSRI(sri)
 
     def process(self):
@@ -127,60 +139,59 @@ class freqfilter_i(freqfilter_base):
         if data == None:
             return NOOP
         
-        if self.streamID!=streamID:
-            if self.streamID==None:
-                self.streamID=streamID
-            else:
-                print "WARNING - freqfilter streamID %s differs from pkt stream ID %s. Throw this packets data on the floor" %(self.streamID, streamID)
-                return NORMAL
+        #get the state from the streamID or create a new state instance for a new streamID
+        if self.state.has_key(streamID):
+            state = self.state[streamID]
+        else:
+            state = FilterState()
+            self.state[streamID]= state
         
-        #check to see if we need to rebuild the filter state
-        if self.updateFilter:
-            self._rebuildFilter()
-        
+        #cash off these values in case they are configured during this process loop
         aCmplx = self.aCmplx
         bCmplx = self.bCmplx
         a = self._a
         b = self._b
-        zi = self.zi
+        #check to see if we need to rebuild the filter state
+        if state.updateFilter:
+            state._applyNewFilterChanges(a, b, aCmplx or bCmplx)
         
         #check to see if we need to push an SRI update
-        if sriChanged or self.forceSriUpdate or not self.port_dataFloat_out.sriDict.has_key(streamID):
+        if sriChanged or state.forceSriUpdate or not self.port_dataFloat_out.sriDict.has_key(streamID):
             self._updateSRI(sri)
         
         #if the input data is complex - unpack it 
-        if self.inputCmplx:
+        if state.inputCmplx:
             x = self._convertCmplx(data)
         else:    
             x = data
 
         #here is the actual filter operation courtesy of scipy
-        output, zi = lfilter(b,a,x,zi=zi)
+        output, zi = lfilter(b,a,x,zi=state.zi)
         
         #update the state for later
-        self.lastX = x
-        self.lastY = output
-        self.zi = zi
+        state.lastX = x
+        state.lastY = output
+        state.zi = zi
         
         #now get ready to send the output
         outData = output.tolist()
-        if self.outputCmplx:
+        if state.outputCmplx:
             sendCmplx=True
             #check for the condition that we were sending complex but all the complex data is out of the system
             #and we can switch to sending real
             #if any of the state is complex we don't update the filter
-            updateFilter = not (self.inputCmplx or aCmplx or bCmplx or self._isCmpxl(zi))
+            updateFilter = not (state.inputCmplx or aCmplx or bCmplx or self._isCmpxl(zi))
             if updateFilter:
                 #state contains no complex data - lets check to see if we have any in the current output
 
                 sendCmplx = self._isCmpxl(outData)              
                 #strip off negligible imaginary values to ensure lastY is purely real 
                 #so we can reset the filter initial conditions next time
-                self.lastY = [x.real for x in outData]
+                state.lastY = [x.real for x in outData]
                 #set all our flags so we know for next loop to update things
-                self.updateFilter=True
-                self.forceSriUpdate=True
-                self.outputCmplx=False           
+                state.updateFilter=True
+                state.forceSriUpdate=True
+                state.outputCmplx=False           
             
             #typical steady state complex case - unpack the real & complex parts to send them out
             if sendCmplx:
@@ -192,7 +203,7 @@ class freqfilter_i(freqfilter_base):
             else:              
                 #now we are sending out real data
                 #we've already stripped off lastY to be just the real - just use it for sending the data
-                outData = self.lastY
+                outData = state.lastY
                 
                 if (sri.mode!=0):
                     print "freqfilter - ERROR - this shouldn't happen"
@@ -202,6 +213,9 @@ class freqfilter_i(freqfilter_base):
 
         #finally get to push the output
         self.port_dataFloat_out.pushPacket(outData, T, EOS, streamID)
+        #if we are done with this stream then pop off the state
+        if EOS:
+            self.state.pop(streamID)
         return NORMAL
 
     def configure(self, configProperties):
@@ -212,10 +226,10 @@ class freqfilter_i(freqfilter_base):
         #check to see if we need to update our filter props
         for prop in configProperties:
             if prop.id in ("aCmplx", "bCmplx", "a", "b"):
-                self.updateFilter = True
+                self._rebuildFilter()
+                for state in self.state.values():
+                    state.updateFilter = True
                 break
-            
-        
   
 if __name__ == '__main__':
     logging.getLogger().setLevel(logging.WARN)

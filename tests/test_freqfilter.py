@@ -376,6 +376,57 @@ class ComponentTests(ossie.utils.testing.ScaComponentTestCase):
         self.sinInputTest(a,b,dataCx=False)
         self.assertFalse(self.outputCmplx)
 
+    def testEOS(self):
+        dataCx=False
+        b, a= self.designIIR()
+        t1 = self.setProps(a,b)
+                #in the pass band
+        s1 = self.genSinWave(.325,1024,dataCx=dataCx)
+        #these next two are in the stop bands
+        s2 = self.genSinWave(.75,1024,dataCx=dataCx)
+        s3 = self.genSinWave(.05,1024,dataCx=dataCx)
+        input = [x+y+z for x,y,z in zip(s1,s2,s3)]
+        trans = self.getTransient(input)
+        
+        #we are already in steady state mode
+        steadyState = self.getTransient(input, eos=True)
+        trans2  = self.getTransient(input, eos=True)
+        self.assertTrue(trans==trans2)
+        self.assertTrue(trans!=steadyState)
+    
+    def testMultiStream(self):
+        b, a= self.designIIR()
+        self.setProps(aCmplx=False,bCmplx=False)
+        self.setProps(a,b)
+                 
+        #give us a bit of time to make sure the configure finishes up
+        self.impulseResponseNoCfg(streamID = "firstStream")
+        self.impulseResponseNoCfg(streamID = "secondStream")
+
+    def getTransient(self,inData, dataCx=False, eos=False):
+        """Make a test with three different sinusoidal inputs --
+           One in the passband and two in the stopbands 
+           The response should be equal to the sinusoid in the passband
+           With a caveat - the frequency domain 
+        """
+        
+        self.main(inData,dataCx=dataCx, eos=eos)
+
+        #Kind of a bit of a lame validation here here 
+        #Filtering may introduce a phase offset at our frequency of interest
+        #So - we may end up with a delayed version of the two sin waves
+        #which is not an integer multiple
+        #this makes it more difficult to do the validation between s1 and the output
+        #as such - I'm doing my validation in the frequency domain and taking the abs
+        #to discount any phase ambiguities
+        
+        #I'm also removing the first points as there could be weird transients with the output
+
+        transientNum=60
+        out = self.output[:transientNum]
+        self.output=[]
+        return out
+
               
     def impluseResponseTest(self,a,b,sendAll=True,dataCx=False):
         """ Run an impulse into the filter and test the impulse response
@@ -384,14 +435,17 @@ class ComponentTests(ossie.utils.testing.ScaComponentTestCase):
         self.setProps(a,b)
         #print len(a), len(b)
         #send in  the impulse signal 
+        self.impulseResponseNoCfg(sendAll,dataCx)
+        
+    def impulseResponseNoCfg(self, sendAll=True,dataCx=False, streamID="myStream"):
         input = [1.0]
         input.extend([0]*1023) 
         if sendAll:
-            self.main(input,dataCx)
+            self.main(input,dataCx, streamID=streamID)
         else:
             for x in input:
                 self.src.push([x])
-            self.main()
+            self.main(streamID=streamID)
         
         #take the 20 log fft of the abs of the response
         f = fft(self.output,1024).tolist()
@@ -468,7 +522,7 @@ class ComponentTests(ossie.utils.testing.ScaComponentTestCase):
             return [math.sin(2*math.pi*f*i) for i in xrange(NumPts)]
             
 
-    def main(self,inData=None, dataCx=False):
+    def main(self,inData=None, dataCx=False,eos=False, streamID="test_stream"):
         """The main engine for all the test cases - configure the equation, push data, and get output
            As applicable
         """
@@ -478,7 +532,7 @@ class ComponentTests(ossie.utils.testing.ScaComponentTestCase):
             #just to mix things up I'm going to push threw in two stages 
             #to ensure the filter is working properly with its state
             
-            self.src.push(inData,complexData=dataCx)
+            self.src.push(inData,complexData=dataCx, EOS=eos, streamID=streamID)
         while True:
             self.output.extend(self.sink.getData())
             if count==40:
