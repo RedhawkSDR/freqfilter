@@ -140,11 +140,15 @@ class freqfilter_i(freqfilter_base):
             return NOOP
         
         #get the state from the streamID or create a new state instance for a new streamID
-        if self.state.has_key(streamID):
+        if self.state.has_key(streamID) and not inputQueueFlushed:
             state = self.state[streamID]
         else:
             state = FilterState()
             self.state[streamID]= state
+                
+        if inputQueueFlushed:
+            self._log.warning("inputQueueFlushed - state reset")
+            
         
         #cash off these values in case they are configured during this process loop
         aCmplx = self.aCmplx
