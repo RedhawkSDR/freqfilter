@@ -184,8 +184,8 @@ class ComponentTests(ossie.utils.testing.ScaComponentTestCase):
         return taps.tolist()  
 
     #the first four tests are designed to work in pairs
-    #make random taps & input data and send it all threw
-    #then send 1/2 threw and the second 1/2 threw again
+    #make random taps & input data and send it all through
+    #then send half through and the second half through again
     #ensure the two outputs are the same
     #mainly this is to help test the filter state tracking stuff is working appropriately
     def testAllReal(self):
@@ -351,7 +351,7 @@ class ComponentTests(ossie.utils.testing.ScaComponentTestCase):
         self.sinInputTest(a,b)
 
     def testRealToComplex(self):
-        """Test 2 -- Send real data threw - then send complex
+        """Test 2 -- Send real data through - then send complex
            Ensure output is first real but then complex
         """
         b, a= self.designIIR()
@@ -362,7 +362,7 @@ class ComponentTests(ossie.utils.testing.ScaComponentTestCase):
         self.assertTrue(self.outputCmplx)
 
     def testComplexToReal(self):
-        """Test 2 -- Send complex data threw - then send real
+        """Test 2 -- Send complex data through - then send real
            Ensure output is first complex but then finally real
         """
         b, a= self.designIIR()
@@ -371,7 +371,7 @@ class ComponentTests(ossie.utils.testing.ScaComponentTestCase):
         self.output=[]
         self.sinInputTest(a,b,dataCx=False)
         self.output=[]
-        #need to send real data threw one more time to get real output
+        #need to send real data through one more time to get real output
         #as there are residual complex effects in the filter as expected
         self.sinInputTest(a,b,dataCx=False)
         self.assertFalse(self.outputCmplx)
@@ -412,9 +412,9 @@ class ComponentTests(ossie.utils.testing.ScaComponentTestCase):
         
         self.main(inData,dataCx=dataCx, eos=eos)
 
-        #Kind of a bit of a lame validation here here 
+        #Kind of a bit of a lame validation here
         #Filtering may introduce a phase offset at our frequency of interest
-        #So - we may end up with a delayed version of the two sin waves
+        #So - we may end up with a delayed version of the two sine waves
         #which is not an integer multiple
         #this makes it more difficult to do the validation between s1 and the output
         #as such - I'm doing my validation in the frequency domain and taking the abs
@@ -529,7 +529,7 @@ class ComponentTests(ossie.utils.testing.ScaComponentTestCase):
         #data processing is asynchronos - so wait until the data is all processed
         count=0
         if inData:
-            #just to mix things up I'm going to push threw in two stages 
+            #just to mix things up I'm going to push through in two stages
             #to ensure the filter is working properly with its state
             
             self.src.push(inData,complexData=dataCx, EOS=eos, streamID=streamID)

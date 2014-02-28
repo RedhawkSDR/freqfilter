@@ -28,13 +28,13 @@ Set a = [1] for a purely FIR filter implementation</description>
     <action type="external"/>
   </simplesequence>
   <simple id="aCmplx" mode="readwrite" type="boolean">
-    <description>Should the coeficients in &quot;a&quot; be treated as complex values</description>
+    <description>Should the coefficients in &quot;a&quot; be treated as complex values</description>
     <value>False</value>
     <kind kindtype="configure"/>
     <action type="external"/>
   </simple>
   <simple id="bCmplx" mode="readwrite" type="boolean">
-    <description>Should the coeficients in &quot;a&quot; be treated as complex values</description>
+    <description>Should the coefficients in &quot;a&quot; be treated as complex values</description>
     <value>False</value>
     <kind kindtype="configure"/>
     <action type="external"/>

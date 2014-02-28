@@ -32,7 +32,7 @@ from scipy.signal import lfiltic, lfilter
 from freqfilter_base import * 
 
 class FilterState(object):
-    """Encapsolate the filter state here to make the filter scalable for multiple streamIDs
+    """Encapsulate the filter state here to make the filter scalable for multiple streamIDs
     """
     def __init__(self):
         
@@ -47,7 +47,7 @@ class FilterState(object):
     def _applyNewFilterChanges(self, a, b, stateCmplx):
         """ apply filter changes 
         """
-        #set up the initial conditions based up on our filters and our history
+        #set up the initial conditions based upon our filters and our history
         self.zi = lfiltic(b,a,self.lastY, self.lastX)
         
         oldOutputCmplx = self.outputCmplx
@@ -72,7 +72,7 @@ class freqfilter_i(freqfilter_base):
         
         It is possible to change between complex input & output and complex taps.  Things should work
         -- but it may take a while to get the output to shift from complex back to real as 
-        you need to let the complex energy work its way threw the filter
+        you need to let the complex energy work its way through the filter
     
     """
     
@@ -152,7 +152,7 @@ class freqfilter_i(freqfilter_base):
 
             
         
-        #cash off these values in case they are configured during this process loop
+        #cache these values in case they are configured during this process loop
         aCmplx = self.aCmplx
         bCmplx = self.bCmplx
         a = self._a
