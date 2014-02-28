@@ -135,6 +135,9 @@ class freqfilter_i(freqfilter_base):
         """
         data, T, EOS, streamID, sri, sriChanged, inputQueueFlushed = self.port_dataFloat_in.getPacket()
         #cache these guys off here in case there are changed mid process loop
+        if inputQueueFlushed:
+            self._log.warning("inputQueueFlushed - state reset")
+            self.state={}
             
         if data == None:
             return NOOP
@@ -146,8 +149,7 @@ class freqfilter_i(freqfilter_base):
             state = FilterState()
             self.state[streamID]= state
                 
-        if inputQueueFlushed:
-            self._log.warning("inputQueueFlushed - state reset")
+
             
         
         #cash off these values in case they are configured during this process loop
