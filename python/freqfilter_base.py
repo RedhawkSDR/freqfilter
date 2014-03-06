@@ -52,9 +52,11 @@ class ProcessThread(threading.Thread):
         state = NORMAL
         while (state != FINISH) and (not self.stop_signal.isSet()):
             state = self.target()
+            delay = 1e-6
             if (state == NOOP):
                 # If there was no data to process sleep to avoid spinning
-                time.sleep(self.pause)
+                delay = self.pause
+            time.sleep(delay)
 
 class freqfilter_base(CF__POA.Resource, Resource):
         # These values can be altered in the __init__ of your derived class
@@ -68,7 +70,7 @@ class freqfilter_base(CF__POA.Resource, Resource):
             Resource.__init__(self, identifier, execparams, loggerName=loggerName)
             self.threadControlLock = threading.RLock()
             self.process_thread = None
-            # self.auto_start is deprecated and is only kept for API compatability
+            # self.auto_start is deprecated and is only kept for API compatibility
             # with 1.7.X and 1.8.0 components.  This variable may be removed
             # in future releases
             self.auto_start = False
@@ -89,6 +91,7 @@ class freqfilter_base(CF__POA.Resource, Resource):
                     self.process_thread.start()
             finally:
                 self.threadControlLock.release()
+
 
         def process(self):
             """The process method should process a single "chunk" of data and then return.  This method will be called
@@ -146,13 +149,17 @@ class freqfilter_base(CF__POA.Resource, Resource):
                                  defvalue=False,
                                  mode="readwrite",
                                  action="external",
-                                 kinds=("configure",)                                 )
+                                 kinds=("configure",),
+                                 description="""Should the coefficients in "a" be treated as complex values"""
+                                 )
         bCmplx = simple_property(id_="bCmplx",
                                  type_="boolean",
                                  defvalue=False,
                                  mode="readwrite",
                                  action="external",
-                                 kinds=("configure",)                                 )
+                                 kinds=("configure",),
+                                 description="""Should the coefficients in "a" be treated as complex values"""
+                                 )
         a = simpleseq_property(id_="a",
                                type_="float",
                                defvalue=[
@@ -160,7 +167,10 @@ class freqfilter_base(CF__POA.Resource, Resource):
                                                       ],
                                mode="readwrite",
                                action="external",
-                               kinds=("configure",)                                    )
+                               kinds=("configure",),
+                               description=""""a" represents the "IIR" part
+                               Set a = [1] for a purely FIR filter implementation"""
+                               )
         b = simpleseq_property(id_="b",
                                type_="float",
                                defvalue=[
@@ -176,9 +186,8 @@ class freqfilter_base(CF__POA.Resource, Resource):
                                mode="readwrite",
                                action="external",
                                kinds=("configure",),
-                               description="""This is an FIR Bandpass fiter with stopbands from 0 to .1*FS and .4*FS to .5*FS and a passband from .2*FS to .3*FS.  It was designed with the following python code
-                               > from scipy.signal import remez
-                               > taps = remez(8,[0,.1,.2,.3,.4,.5],[0,1,0])
+                               description=""""b" represents the "FIR" part.
+                               Set b = [1] for a purely IIR filter implementation
                                """
                                )
 
