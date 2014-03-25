@@ -26,6 +26,7 @@ from ossie.utils import uuid
 from ossie.resource import Resource
 from ossie.properties import simple_property
 from ossie.properties import simpleseq_property
+from ossie.properties import struct_property
 
 import Queue, copy, time, threading
 from ossie.resource import usesport, providesport
@@ -52,9 +53,11 @@ class ProcessThread(threading.Thread):
         state = NORMAL
         while (state != FINISH) and (not self.stop_signal.isSet()):
             state = self.target()
+            delay = 1e-6
             if (state == NOOP):
                 # If there was no data to process sleep to avoid spinning
-                time.sleep(self.pause)
+                delay = self.pause
+            time.sleep(delay)
 
 class freqfilter_base(CF__POA.Resource, Resource):
         # These values can be altered in the __init__ of your derived class
@@ -68,7 +71,7 @@ class freqfilter_base(CF__POA.Resource, Resource):
             Resource.__init__(self, identifier, execparams, loggerName=loggerName)
             self.threadControlLock = threading.RLock()
             self.process_thread = None
-            # self.auto_start is deprecated and is only kept for API compatability
+            # self.auto_start is deprecated and is only kept for API compatibility
             # with 1.7.X and 1.8.0 components.  This variable may be removed
             # in future releases
             self.auto_start = False
@@ -141,44 +144,83 @@ class freqfilter_base(CF__POA.Resource, Resource):
         # 
         # DO NOT ADD NEW PROPERTIES HERE.  You can add properties in your derived class, in the PRF xml file
         # or by using the IDE.
-        aCmplx = simple_property(id_="aCmplx",
-                                 type_="boolean",
-                                 defvalue=False,
-                                 mode="readwrite",
-                                 action="external",
-                                 kinds=("configure",)                                 )
-        bCmplx = simple_property(id_="bCmplx",
-                                 type_="boolean",
-                                 defvalue=False,
-                                 mode="readwrite",
-                                 action="external",
-                                 kinds=("configure",)                                 )
         a = simpleseq_property(id_="a",
                                type_="float",
-                               defvalue=[
-                                                      1.0,
-                                                      ],
-                               mode="readwrite",
-                               action="external",
-                               kinds=("configure",)                                    )
-        b = simpleseq_property(id_="b",
-                               type_="float",
-                               defvalue=[
-                                                      0.09474881,
-                                                      -0.17830388,
-                                                      -0.24363046,
-                                                      0.26963846,
-                                                      0.26963846,
-                                                      -0.24363046,
-                                                      -0.17830388,
-                                                      0.09474881,
-                                                      ],
+                               defvalue=None,
+                               complex=True,
                                mode="readwrite",
                                action="external",
                                kinds=("configure",),
-                               description="""This is an FIR Bandpass fiter with stopbands from 0 to .1*FS and .4*FS to .5*FS and a passband from .2*FS to .3*FS.  It was designed with the following python code
-                               > from scipy.signal import remez
-                               > taps = remez(8,[0,.1,.2,.3,.4,.5],[0,1,0])
+                               description=""""a" represents the "IIR" part
+                               Set a = [1] for a purely FIR filter implementation"""
+                               )
+        b = simpleseq_property(id_="b",
+                               type_="float",
+                               defvalue=None,
+                               complex=True,
+                               mode="readwrite",
+                               action="external",
+                               kinds=("configure",),
+                               description=""""b" represents the "FIR" part.
+                               Set b = [1] for a purely IIR filter implementation
                                """
                                )
+        class FilterProps(object):
+            TransitionWidth = simple_property(id_="TransitionWidth",
+                                              type_="double",
+                                              defvalue=800.0,
+                                              )
+            Type = simple_property(id_="Type",
+                                   type_="string",
+                                   )
+            Ripple = simple_property(id_="Ripple",
+                                     type_="double",
+                                     defvalue=0.01,
+                                     )
+            freq1 = simple_property(id_="freq1",
+                                    type_="double",
+                                    defvalue=1000.0,
+                                    )
+            freq2 = simple_property(id_="freq2",
+                                    type_="double",
+                                    defvalue=2000.0,
+                                    )
+            filterComplex = simple_property(id_="filterComplex",
+                                            type_="boolean",
+                                            )
+        
+            def __init__(self, **kw):
+                """Construct an initialized instance of this struct definition"""
+                for attrname, classattr in type(self).__dict__.items():
+                    if type(classattr) == simple_property:
+                        classattr.initialize(self)
+                for k,v in kw.items():
+                    setattr(self,k,v)
+        
+            def __str__(self):
+                """Return a string representation of this structure"""
+                d = {}
+                d["TransitionWidth"] = self.TransitionWidth
+                d["Type"] = self.Type
+                d["Ripple"] = self.Ripple
+                d["freq1"] = self.freq1
+                d["freq2"] = self.freq2
+                d["filterComplex"] = self.filterComplex
+                return str(d)
+        
+            def getId(self):
+                return "filterProps"
+        
+            def isStruct(self):
+                return True
+        
+            def getMembers(self):
+                return [("TransitionWidth",self.TransitionWidth),("Type",self.Type),("Ripple",self.Ripple),("freq1",self.freq1),("freq2",self.freq2),("filterComplex",self.filterComplex)]
+
+        filterProps = struct_property(id_="filterProps",
+                                      structdef=FilterProps,
+                                      configurationkind=("configure",),
+                                      mode="readwrite",
+                                      description="""Configure this property to use the internal filter designer to create your filter coefficients."""
+                                      )
 

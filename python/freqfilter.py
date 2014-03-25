@@ -26,38 +26,234 @@
 # Build id: v201212041901
 from ossie.resource import Resource, start_component
 import logging
+import threading
 
-from scipy.signal import lfiltic, lfilter
+import math
+from scipy.signal import lfiltic, lfilter, iirdesign
 
 from freqfilter_base import * 
+
+def convertCmplx(input):
+    """Convert a real list into a python complex list of 1/2 the size
+    """
+    out=[]
+    for i in xrange(len(input)/2):
+        out.append(complex(input[2*i], input[2*i+1]))
+    return out
+
+def demuxCxData(cxInput):
+    out=[]
+    for val in cxInput:
+        out.append(val.real)
+        out.append(val.imag)
+    return out
+
+def isCmpxl(vec):
+    """Check to see if there is any substantial imaginary component left in the vector
+    """
+    real =0.0
+    imag = 0.0
+    for val in vec:
+        if isinstance(val,complex):
+            real+=abs(val.real)
+            imag+=abs(val.imag)
+        else:
+            real+=abs(val)
+    
+    return (imag/(real+imag)>1e-5) #arbitrary threshold for whether or not data is no longer complex  
+
 
 class FilterState(object):
     """Encapsulate the filter state here to make the filter scalable for multiple streamIDs
     """
+    MAX_BUFFER_LEN = 8*1024
     def __init__(self):
         
+        self.newFilterLock = threading.Lock()        
+        self.newFilter = None
         self.zi=None
         self.outputCmplx=None
         self.lastX = []
         self.lastY = []
-        self.updateFilter=True
-        self.inputCmplx=None
-        self.forceSriUpdate=True
+        self.xdelta = None
+        self.a = self.b=[]
+        self.filterComplex=None
+        self.filterProps=None
+
+    def setNewFilter(self, newFilter):
+        self.newFilterLock.acquire()
+        self.newFilter = newFilter
+        self.newFilterLock.release()
+
+    def process(self, data,sri, T):
+        #store off newFilter value now to keep from race condition in case someone updates us
+        self.newFilterLock.acquire()
+        newFilter = self.newFilter
+        self.newFilter=None
+        self.newFilterLock.release()
         
-    def _applyNewFilterChanges(self, a, b, stateCmplx):
-        """ apply filter changes 
+        #initial conidition for internal variable for this process block
+        sriPush=False        
+        #look for xdelta change
+        if sri.xdelta != self.xdelta:
+            sriPush=True
+            self.xdelta = sri.xdelta
+            #our history is invalid (it would have to be resampled to be valid)
+            #clear it out and star afresh
+            self.lastX = self.lastY=[]
+            self.zi=None
+            #if the sample rate changed and filterProps
+            #we must redesign our taps to stay up to date with the new rate
+            if self.filterProps!=None and newFilter==None:
+                newFilter = self.filterProps
+                      
+        #take care of doing a new filter update
+        if newFilter !=None:
+            if isinstance(newFilter, tuple):
+                self.a, self.b, self.filterComplex = newFilter
+                self.filterProps=None
+            else:
+                self.filterProps = newFilter
+                #set self.a, self.b, and filterComplex in the designFilter method
+                self._designFilter()
+            #reset our state to None so we will calculate it later
+            self.zi=None
+
+        #if we don't have any history - calculate it for this set of filter coeficients 
+        if self.zi==None:
+            #get new initial conditions -- only use the final elements from our old data
+            M = len(self.b)-1
+            N = len(self.a)-1
+            self.zi = lfiltic(self.b,self.a,self.lastY[-M:], self.lastX[-N:])
+
+        #deal with complexity of output as a function of input complexity and filter state complexity
+        inputCmplx = sri.mode==1
+        if inputCmplx:
+            #convert the data to be complex
+            data = convertCmplx(data)
+            outputCmplx=True    
+        elif self.filterComplex:
+            outputCmplx = True
+        elif self.outputCmplx:
+            #if input is not complex and filter is not complex and the output was complex
+            # check if the complexity has worked its way out of the iir state
+            # data remains complex only if the intial conditions reamin complex
+            outputCmplx = isCmpxl(self.zi)
+        else:
+            #if all are real - then the output is also real
+            outputCmplx=False
+         
+        #deal with output changing complexity
+        if outputCmplx != self.outputCmplx:
+            #force SRI push
+            sriPush=True
+            self.outputCmplx = outputCmplx
+            if not self.outputCmplx and self.zi!=None:
+                #take the real part of all of our history because the output is no longer complex
+                self.zi = [x.real for x in self.zi]
+
+        #now update the sri.mode to reflect the state of the output
+        if outputCmplx:
+            sri.mode = 1
+        else:
+            sri.mode=0
+                    
+        #here is the actual filter operation courtesy of scipy
+        if self.zi!=[]:
+            #this is the typical case
+            output, self.zi = lfilter(self.b,self.a,data,zi=self.zi)
+        else:
+            #this is a corner case if the user has configured us so that no filtering is necessary!
+            output = lfilter(self.b,self.a,data)
+        
+        historyLen = max(self.MAX_BUFFER_LEN, len(self.zi))
+        #store history for next go in case we need to remake our filter 
+        self.lastX.extend(data)
+        if len(self.lastX) > historyLen:
+            self.lastX = self.lastX[-historyLen:]
+        
+        self.lastY.extend(output)
+        if len(self.lastY) > historyLen:
+            self.lastY = self.lastY[-historyLen:]
+        
+        if self.outputCmplx:
+            output = demuxCxData(output)
+        else:
+            output = list(output)
+        
+        return sriPush, output
+
+    def _designFilter(self):
+        """design IIR filter coeficients with the iirdesign method
         """
-        #set up the initial conditions based upon our filters and our history
-        self.zi = lfiltic(b,a,self.lastY, self.lastX)
-        
-        oldOutputCmplx = self.outputCmplx
-        #if the taps are complex or the initial condition is complex we will be complex
-        if stateCmplx:
-            self.outputCmplx = True  
-        #if we are changing between real and complex modes force an sri update to reflect this 
-        if (oldOutputCmplx != self.outputCmplx):
-            self.forceSriUpdate = True
-        self.updateFilter=False
+        wTransition= self.filterProps.TransitionWidth*self.xdelta
+        #this took long to figure out then I'd like to admit
+        #the gain gainStop is the typical conversion
+        #but the passband gain is measured from 0 instead of the ripple from 1
+        #so we have to do 1-Val to get the bound on the ripple from the desired value
+        gainStop = -20*math.log10(self.filterProps.Ripple)
+        gainPass = -20*math.log10(1-self.filterProps.Ripple)
+        f1Norm= self.filterProps.freq1*self.xdelta*2.0
+        if self.filterProps.Type in ('bandpass','bandstop'):
+            wfreqs = [f1Norm,  self.filterProps.freq2*self.xdelta*2.0]
+            wfreqs.sort()
+        if self.filterProps.filterComplex and self.filterProps.Type in ('bandpass','bandstop'):
+            #for the compelx types - design a low version of the filter.  Then modulate it to the 
+            #correct output center frequency by multiplying the taps a complex tuner exponential
+            self.filterComplex = True
+            #design a low pass filter then modulate the FIR part up
+            w1 = (wfreqs[1] - wfreqs[0])/2.0
+            w2 = w1+ wTransition
+            if self.filterProps.Type=='bandpass':
+                wp = w1
+                ws = w2
+            else:
+                wp = w2
+                ws = w1
+        else:
+            self.filterComplex = False
+            if self.filterProps.Type in ('lowpass', 'highpass'):
+                w1 = f1Norm
+                w2 = w1+wTransition
+
+            else:
+                w1 = wfreqs
+                w2 = [w1[0]-wTransition, w1[1]+wTransition]
+                                    
+            if self.filterProps.Type in ('lowpass', 'bandpass'):
+                wp=w1
+                ws=w2
+            else:
+                wp=w2
+                ws=w1
+
+        try:
+            self.b, self.a = iirdesign(wp,ws,gstop=gainStop,gpass=gainPass, output='ba')
+        except Exception, e:
+            print "WARNING - IIRDESIGN HAS FAILED!"
+            print e
+            print "wp = ", wp, 
+            print "ws = ", ws
+            print "gainStop = ", gainStop
+            print "gpass = ", gainPass
+            print "freq1", self.filterProps.freq1
+            print "freq1", self.filterProps.freq2
+            print "xdelta = ", self.xdelta
+            self.a=[1]
+            self.b=[1]
+        if self.filterComplex:
+            #multiply the designed taps by the output frequency
+            wc = sum(wfreqs)*math.pi/2.0
+            bTuned = []
+            aTuned = []
+            tuner=0
+            for aval, bval in zip(self.a,self.b):
+                cxTuner = complex(math.cos(tuner),math.sin(tuner))
+                aTuned.append(aval*cxTuner)
+                bTuned.append(bval*cxTuner)
+                tuner +=wc
+            self.a = aTuned
+            self.b = bTuned
 
 class freqfilter_i(freqfilter_base):
     """Freq filter implements a direct form 2 FIR/IIR real or complex tap filter leveraging scipy.signal lfilter.
@@ -82,53 +278,26 @@ class freqfilter_i(freqfilter_base):
         """
         freqfilter_base.initialize(self)
         self.state={}
-        self._rebuildFilter()
+        self._a=self._b=[]
+        self.manualTaps=False
+        self._filterComplex=False
+        self.newFilterPropLock = threading.Lock() 
     
-    def _isCmpxl(self, vec):
-        """Check to see if there is any substantial imaginary component left in the vector
-        """
-        real =0.0
-        imag = 0.0
-        for val in vec:
-            if isinstance(val,complex):
-                real+=abs(val.real)
-                imag+=abs(val.imag)
-            else:
-                real+=abs(val)
-        
-        return (imag/(real+imag)>1e-5) #arbitrary threshold for whether or not data is no longer complex   
-    
-    def _rebuildFilter(self):        
+    def _rebuildManual(self):        
         """rebuild the filter initial condition based upon current state
         """
-        if self.aCmplx:
-            self._a = self._convertCmplx(self.a)
-        else:
-            self._a = self.a
-        if self.bCmplx:
-            self._b = self._convertCmplx(self.b)
-        else:
-            self._b = self.b
-        
-    def _convertCmplx(self, input):
-        """Convert a real list into a python complex list of 1/2 the size
-        """
-        out=[]
-        for i in xrange(len(input)/2):
-            out.append(complex(input[2*i], input[2*i+1]))
-        return out
-
-    def _updateSRI(self, sri):
-        """Update the sri as appropriate and send out an sri packet
-        """
-        state = self.state[sri.streamID]
-        state.inputCmplx = (sri.mode==1)
-        if state.inputCmplx:
-            state.outputCmplx = True
-        if state.outputCmplx:
-            sri.mode=1
-        state.forceSriUpdate=False
-        self.port_dataFloat_out.pushSRI(sri)
+        if self.manualTaps:
+            aComplex =isCmpxl(self.a)
+            bComplex =isCmpxl(self.b)
+            self._filterComplex = aComplex or aComplex
+            if aComplex:
+                self._a = self.a[:]
+            else:
+                self._a=[x.real for x in self.a]
+            if bComplex:
+                self._b = self.b[:]
+            else:
+                self._b=[x.real for x in self.b]
 
     def process(self):
         """Main process loop
@@ -143,80 +312,23 @@ class freqfilter_i(freqfilter_base):
             return NOOP
         
         #get the state from the streamID or create a new state instance for a new streamID
-        if self.state.has_key(streamID) and not inputQueueFlushed:
+        if self.state.has_key(streamID):
             state = self.state[streamID]
         else:
+            self._log.debug("got new streamID  %s"%streamID)
             state = FilterState()
+            self.newFilterPropLock.acquire()
             self.state[streamID]= state
-                
-
-            
+            if self.manualTaps:
+                state.setNewFilter((self._a,self._b, self._filterComplex))
+            else:
+                state.setNewFilter(self.filterProps)
+            self.newFilterPropLock.release()
         
-        #cache these values in case they are configured during this process loop
-        aCmplx = self.aCmplx
-        bCmplx = self.bCmplx
-        a = self._a
-        b = self._b
-        #check to see if we need to rebuild the filter state
-        if state.updateFilter:
-            state._applyNewFilterChanges(a, b, aCmplx or bCmplx)
-        
-        #check to see if we need to push an SRI update
-        if sriChanged or state.forceSriUpdate or not self.port_dataFloat_out.sriDict.has_key(streamID):
-            self._updateSRI(sri)
-        
-        #if the input data is complex - unpack it 
-        if state.inputCmplx:
-            x = self._convertCmplx(data)
-        else:    
-            x = data
-
-        #here is the actual filter operation courtesy of scipy
-        output, zi = lfilter(b,a,x,zi=state.zi)
-        
-        #update the state for later
-        state.lastX = x
-        state.lastY = output
-        state.zi = zi
-        
-        #now get ready to send the output
-        outData = output.tolist()
-        if state.outputCmplx:
-            sendCmplx=True
-            #check for the condition that we were sending complex but all the complex data is out of the system
-            #and we can switch to sending real
-            #if any of the state is complex we don't update the filter
-            updateFilter = not (state.inputCmplx or aCmplx or bCmplx or self._isCmpxl(zi))
-            if updateFilter:
-                #state contains no complex data - lets check to see if we have any in the current output
-
-                sendCmplx = self._isCmpxl(outData)              
-                #strip off negligible imaginary values to ensure lastY is purely real 
-                #so we can reset the filter initial conditions next time
-                state.lastY = [x.real for x in outData]
-                #set all our flags so we know for next loop to update things
-                state.updateFilter=True
-                state.forceSriUpdate=True
-                state.outputCmplx=False           
-            
-            #typical steady state complex case - unpack the real & complex parts to send them out
-            if sendCmplx:
-                unpackedOutdata=[]      
-                for val in outData:
-                    unpackedOutdata.append(val.real)
-                    unpackedOutdata.append(val.imag)
-                    outData=unpackedOutdata
-            else:              
-                #now we are sending out real data
-                #we've already stripped off lastY to be just the real - just use it for sending the data
-                outData = state.lastY
-                
-                if (sri.mode!=0):
-                    print "freqfilter - ERROR - this shouldn't happen"
-                    sri.mode = 0
-                #if we are sending out real we must push an sri first to alert down stream of the change  
-                self._updateSRI(sri)
-
+        forceSriUpdate, outData = state.process(data,sri, T)
+        if forceSriUpdate or sriChanged:
+            self._log.debug("pushing output sri %s"%streamID)
+            self.port_dataFloat_out.pushSRI(sri)
         #finally get to push the output
         self.port_dataFloat_out.pushPacket(outData, T, EOS, streamID)
         #if we are done with this stream then pop off the state
@@ -227,15 +339,30 @@ class freqfilter_i(freqfilter_base):
     def configure(self, configProperties):
         """override base class
         """
-        #call base class method
+        abConfigured = any([prop.id in ("a", "b") for prop in configProperties])
+        filterPropsConfigured = any([prop.id =='filterProps'for prop in configProperties])
+        if self._started and abConfigured and filterPropsConfigured:
+            raise CF.PropertySet.InvalidConfiguration("Cannot configure filterProps and taps simultaniously", configProperties)
         freqfilter_base.configure(self, configProperties)
         #check to see if we need to update our filter props
-        for prop in configProperties:
-            if prop.id in ("aCmplx", "bCmplx", "a", "b"):
-                self._rebuildFilter()
-                for state in self.state.values():
-                    state.updateFilter = True
-                break
+        if filterPropsConfigured:
+            self._log.debug("filterPropsConfigured")
+            self.newFilterPropLock.acquire()
+            self.manualTaps=False
+            self.a = []
+            self.b = []
+            for state in self.state.values():
+                state.setNewFilter(self.filterProps)                      
+            self.newFilterPropLock.release()
+                
+        elif abConfigured:
+            self._log.debug("abConfigured")
+            self.newFilterPropLock.acquire()
+            self.manualTaps=True
+            self._rebuildManual()       
+            for state in self.state.values():
+                state.setNewFilter((self._a,self._b, self._filterComplex))
+            self.newFilterPropLock.release()
   
 if __name__ == '__main__':
     logging.getLogger().setLevel(logging.WARN)
