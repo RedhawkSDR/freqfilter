@@ -30,6 +30,13 @@ from scipy.fftpack import fft, rfft
 from numpy import log10
 import operator
 import random
+import sys
+sys.path.append('../../fastfilter/tests')
+
+from test_fastfilter import ImpulseResponseMixIn
+#The IIR design techniques are not as good - have more grace 
+#for doing the validation here
+ImpulseResponseMixIn.RIPPLE_MULT=2.0
 
 def toCx(input):
     cx=[]
@@ -47,11 +54,10 @@ def toReal(input):
 def muxZeros(input):
     out = []
     for val in input:
-        out.append(val)
-        out.append(0.0)
+        out.append(complex(val,0.0))
     return out
 
-class ComponentTests(ossie.utils.testing.ScaComponentTestCase):
+class ComponentTests(ossie.utils.testing.ScaComponentTestCase, ImpulseResponseMixIn):
     """Test for all component implementations in fcalc"""
     
     #make some random taps but lets make sure we are stable
@@ -60,7 +66,16 @@ class ComponentTests(ossie.utils.testing.ScaComponentTestCase):
         A = [random.random() for _ in xrange(6)]
         poles = tf2zpk(B,A)[1]
         if all([abs(x)<1 for x in poles]):
-            break    
+            break
+    
+    while True:        
+        B_CX = [complex(random.random(),random.random()) for _ in xrange(10)]
+        A_CX = [complex(random.random(),random.random()) for _ in xrange(6)]
+        poles = tf2zpk(B_CX,A_CX)[1]
+        if all([abs(x)<1 for x in poles]):
+            break
+
+            
     INPUT = [random.random() for _ in xrange(1024)]
         
     REALOUT = None
@@ -68,26 +83,30 @@ class ComponentTests(ossie.utils.testing.ScaComponentTestCase):
 
     #utility methods to help with SCA set up and tear down for testing
 
-    def setProps(self, a=None,b=None,aCmplx = None, bCmplx=None):
+    def _getCfFloatSeq(self, inData):
+        data=[]
+        for x in inData:
+            if isinstance(x,complex):
+                data.append(ossie.cf.CF.complexFloat(real=x.real, imag=x.imag))
+            else:
+                data.append(ossie.cf.CF.complexFloat(real=x, imag=0.0))
+        return CORBA.Any(orb.create_sequence_tc(bound=0, element_type=CORBA.TypeCode("IDL:CF/complexFloat:1.0")), data)        
+
+    def setProps(self, a=None,b=None,filterProps=None):
         myProps=[]
         
         if a!=None:
             self.a = a
-            myProps.append(CF.DataType(id='a',value=CORBA.Any(orb.create_sequence_tc(bound=0, element_type=CORBA.TC_float), a)))
+            myProps.append(CF.DataType(id='a', value=self._getCfFloatSeq(a)))
         
         if b!=None:
             self.b = b
-            myProps.append(CF.DataType(id='b',value=CORBA.Any(orb.create_sequence_tc(bound=0, element_type=CORBA.TC_float), b)))
-
-        if aCmplx!=None:
-            myProps.append(CF.DataType(id='aCmplx', value=CORBA.Any(CORBA.TC_boolean, aCmplx)))
-            
-        if bCmplx!=None:
-            myProps.append(CF.DataType(id='bCmplx', value=CORBA.Any(CORBA.TC_boolean, bCmplx)))
+            myProps.append(CF.DataType(id='b', value=self._getCfFloatSeq(b)))
+        
+        if filterProps!=None:
+            myProps.append(self.makeFilterProps(**filterProps))
         
         if myProps:
-
-            #configure it
             self.comp.configure(myProps)
 
     def setUp(self):
@@ -183,6 +202,16 @@ class ComponentTests(ossie.utils.testing.ScaComponentTestCase):
         taps =  remez(64,[0,.1,.3,.35,.5,1.0],[.01,1,.01],Hz=2)
         return taps.tolist()  
 
+    def testBadCfg(self):
+        """Set with multiple filterProp settings simultaniously and verify we get an error
+        """
+        try:
+            self.setProps(self.A,self.B,{})
+        except CF.PropertySet.InvalidConfiguration:
+            return
+        raise RunTimeError("No error raised in testBadCfg1")
+
+    
     #the first four tests are designed to work in pairs
     #make random taps & input data and send it all through
     #then send half through and the second half through again
@@ -192,7 +221,7 @@ class ComponentTests(ossie.utils.testing.ScaComponentTestCase):
         """Real test part 1
         """
         self.setProps(self.A,self.B)
-        self.main(self.INPUT)
+        self.main([self.INPUT])
         if ComponentTests.REALOUT ==None:
             ComponentTests.REALOUT = self.output
         else:
@@ -203,8 +232,8 @@ class ComponentTests(ossie.utils.testing.ScaComponentTestCase):
         """
         self.setProps(self.A,self.B)
         numPush = len(self.INPUT)/2
-        self.main(self.INPUT[:numPush])
-        self.main(self.INPUT[numPush:])
+        self.main([self.INPUT[:numPush]])
+        self.main([self.INPUT[numPush:]])
         if ComponentTests.REALOUT ==None:
             ComponentTests.REALOUT = self.output
         else:
@@ -214,8 +243,8 @@ class ComponentTests(ossie.utils.testing.ScaComponentTestCase):
         """Cx test part 1
         """
         
-        self.setProps(self.A,self.B)
-        self.main(self.INPUT)
+        self.setProps(self.A_CX,self.B_CX)
+        self.main([self.INPUT])
         if ComponentTests.CXOUT ==None:
             ComponentTests.CXOUT = self.output
         else:
@@ -224,10 +253,10 @@ class ComponentTests(ossie.utils.testing.ScaComponentTestCase):
     def testHalfCx(self):    
         """cx test part 2
         """
-        self.setProps(self.A,self.B)
+        self.setProps(self.A_CX,self.B_CX)
         numPush = len(self.INPUT)/2
-        self.main(self.INPUT[:numPush])
-        self.main(self.INPUT[numPush:])
+        self.main([self.INPUT[:numPush]])
+        self.main([self.INPUT[numPush:]])
         if ComponentTests.CXOUT ==None:
             ComponentTests.CXOUT = self.output
         else:
@@ -238,7 +267,16 @@ class ComponentTests(ossie.utils.testing.ScaComponentTestCase):
            Not very efficient filtering but a good test case
         """
         b, a= self.designIIR()
-        self.impluseResponseTest(a,b,False) 
+        self.impluseResponseTest(a,b,False)
+
+    def testImpulseIIROneAtATimeNoCfg(self):
+        """send in one input at a time to make sure that the filter is doing its state updates properly
+           Not very efficient filtering but a good test case
+        """
+        b, a= self.designIIR()
+        self.setProps(a,b)
+        self.impulseResponseNoCfg(False) 
+ 
             
     def testImpluseIIR(self):
         """IIR Test 1
@@ -264,92 +302,18 @@ class ComponentTests(ossie.utils.testing.ScaComponentTestCase):
         taps = self.designFIR()
         self.sinInputTest([1],taps)
     
-    def testCxAllImpulseResponse(self):
-        """TEST 1 with all complex values
-        """
-        b, a= self.designIIR()
-        b=muxZeros(b)
-        a=muxZeros(a)
-        self.setProps(aCmplx=True,bCmplx=True)
-        self.impluseResponseTest(a,b,dataCx=True)
-    
-    def testCxAllSin(self):
-        """Test 2 with all compelx values
-        """
-        b, a= self.designIIR()
-        b=muxZeros(b)
-        a=muxZeros(a)
-        self.setProps(aCmplx=True,bCmplx=True)
-        self.sinInputTest(a,b,dataCx = True)
-    
-    def testCxInputImpulseResponse(self):
-        """test 1 with complex data only but real taps
+    def testCxImpulseResponse(self):
+        """TEST 1 with complex data
         """
         b, a= self.designIIR()
         self.impluseResponseTest(a,b,dataCx=True)
     
-    def testCxInputSin(self):
-        """test 2 with complex data only but real taps
+    def testCxSin(self):
+        """Test 2 with complex data
         """
         b, a= self.designIIR()
         self.sinInputTest(a,b,dataCx = True)
     
-    def testCxInputImpulseResponseFilters(self):
-        """test 1 with real data but complex a& b 
-        """
-        b, a= self.designIIR()
-        b=muxZeros(b)
-        a=muxZeros(a)
-        self.setProps(aCmplx=True,bCmplx=True)
-        #give us a bit of time to make sure the configure finishes up
-        self.impluseResponseTest(a,b)
-
-    def testCxInputSinBoth(self):
-        """test 2 with real data but complex a& b 
-        """
-        b, a= self.designIIR()
-        b=muxZeros(b)
-        a=muxZeros(a)
-        self.setProps(aCmplx=True,bCmplx=True)
-        #give us a bit of time to make sure the configure finishes up
-        self.sinInputTest(a,b)
-
-    def testCxInputImpulseResponseA(self):
-        """test 1 with real data but complex a & real b 
-        """
-        b, a= self.designIIR()
-        a=muxZeros(a)
-        self.setProps(aCmplx=True,bCmplx=False)
-        #give us a bit of time to make sure the configure finishes up
-        self.impluseResponseTest(a,b)
-    
-    def testCxInputSinA(self):
-        """test 2 with real data but complex a & real b 
-        """
-        b, a= self.designIIR()
-        a=muxZeros(a)
-        self.setProps(aCmplx=True,bCmplx=False)
-        #give us a bit of time to make sure the configure finishes up
-        self.sinInputTest(a,b)
- 
-    def testCxInputImpulseResponseB(self):
-        """test 1 with real data but real a & complex b 
-        """
-        b, a= self.designIIR()
-        b=muxZeros(b)
-        self.setProps(aCmplx=False,bCmplx=True)
-        #give us a bit of time to make sure the configure finishes up
-        self.impluseResponseTest(a,b)
-
-    def testCxInputSinB(self):
-        """test 2 with real data but real a & complex b 
-        """       
-        b, a= self.designIIR()
-        b=muxZeros(b)
-        self.setProps(aCmplx=False,bCmplx=True)
-        #give us a bit of time to make sure the configure finishes up
-        self.sinInputTest(a,b)
-
     def testRealToComplex(self):
         """Test 2 -- Send real data through - then send complex
            Ensure output is first real but then complex
@@ -396,7 +360,6 @@ class ComponentTests(ossie.utils.testing.ScaComponentTestCase):
     
     def testMultiStream(self):
         b, a= self.designIIR()
-        self.setProps(aCmplx=False,bCmplx=False)
         self.setProps(a,b)
                  
         #give us a bit of time to make sure the configure finishes up
@@ -410,7 +373,7 @@ class ComponentTests(ossie.utils.testing.ScaComponentTestCase):
            With a caveat - the frequency domain 
         """
         
-        self.main(inData,dataCx=dataCx, eos=eos)
+        self.main([inData],dataCx=dataCx, eos=eos)
 
         #Kind of a bit of a lame validation here
         #Filtering may introduce a phase offset at our frequency of interest
@@ -433,23 +396,22 @@ class ComponentTests(ossie.utils.testing.ScaComponentTestCase):
             Just take the fft and work with it to get an idea of the frequency response
         """
         self.setProps(a,b)
-        #print len(a), len(b)
-        #send in  the impulse signal 
         self.impulseResponseNoCfg(sendAll,dataCx)
         
     def impulseResponseNoCfg(self, sendAll=True,dataCx=False, streamID="myStream"):
         input = [1.0]
         input.extend([0]*1023) 
         if sendAll:
-            self.main(input,dataCx, streamID=streamID)
+            self.main([input],dataCx, streamID=streamID)
         else:
             for x in input:
-                self.src.push([x])
+                self.src.push([x],complexData=dataCx, streamID=streamID)
             self.main(streamID=streamID)
         
         #take the 20 log fft of the abs of the response
         f = fft(self.output,1024).tolist()
         m = [20*log10(abs(x)) for x in f]
+        
         freqDelta = 2.0/1024
         #check the passband
         startIndex = int(.3/freqDelta)
@@ -483,7 +445,7 @@ class ComponentTests(ossie.utils.testing.ScaComponentTestCase):
         s3 = self.genSinWave(.05,1024,dataCx=dataCx)
         input = [x+y+z for x,y,z in zip(s1,s2,s3)]
         
-        self.main(input,dataCx=dataCx)
+        self.main([input],dataCx=dataCx)
 
         #Kind of a bit of a lame validation here here 
         #Filtering may introduce a phase offset at our frequency of interest
@@ -522,27 +484,33 @@ class ComponentTests(ossie.utils.testing.ScaComponentTestCase):
             return [math.sin(2*math.pi*f*i) for i in xrange(NumPts)]
             
 
-    def main(self,inData=None, dataCx=False,eos=False, streamID="test_stream"):
+    def main(self,inData=[], dataCx=False,eos=False, streamID="test_stream", sampleRate=1.0):
         """The main engine for all the test cases - configure the equation, push data, and get output
            As applicable
         """
         #data processing is asynchronos - so wait until the data is all processed
         count=0
+        thisOutput=[]
         if inData:
             #just to mix things up I'm going to push through in two stages
             #to ensure the filter is working properly with its state
             
-            self.src.push(inData,complexData=dataCx, EOS=eos, streamID=streamID)
+            for data in inData:
+                self.src.push(data,complexData=dataCx, EOS=eos, streamID=streamID,sampleRate=sampleRate)
         while True:
-            self.output.extend(self.sink.getData())
-            if count==40:
+            newOut = self.sink.getData()
+            if newOut:
+                thisOutput.extend(newOut)
+                count=0
+            if count==50:
                 break
             time.sleep(.01)
             count+=1
         #convert the output to complex if necessary    
         self.outputCmplx = self.sink.sri().mode==1
         if self.outputCmplx:
-            self.output = toCx(self.output)
+            thisOutput = toCx(thisOutput)
+        self.output.extend(thisOutput)
     
 if __name__ == "__main__":
     ossie.utils.testing.main("../freqfilter.spd.xml") # By default tests all implementations

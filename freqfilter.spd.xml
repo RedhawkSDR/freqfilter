@@ -24,12 +24,9 @@ program.  If not, see http://www.gnu.org/licenses/.
   </author>
   <description>freqfilter implements a direct form 2 FIR/IIR real or complex tap filter leveraging scipy.signal lfilter.
 
-The default properties are configured for a FIR bandpass fiter with stopbands from 0 to .1*FS and .4*FS to .5*FS and a passband from .2*FS to .3*FS.  It was designed with the following python code:
+1.  Component configured via property &quot;a&quot; or &quot;b&quot;.  This provides filtering via the parameters provided regardless of the input sample rate.  Please see scipy documenation for more information on lfilter and iir filter design for help in intelligiently choosing these parameters.
 
-> from scipy.signal import remez
-> taps = remez(8,[0,.1,.2,.3,.4,.5],[0,1,0])
-
-Please see scipy for complete documentation.</description>
+2.  Component configured via &quot;filterProps&quot;.  This clears the properties &quot;a&quot; and &quot;b&quot;.  The component proceedes to design a set of filter coeficients acording to the values of &quot;filterProps&quot;.</description>
   <propertyfile type="PRF">
     <localfile name="freqfilter.prf.xml"/>
   </propertyfile>
