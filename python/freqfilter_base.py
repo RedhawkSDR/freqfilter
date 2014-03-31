@@ -172,6 +172,7 @@ class freqfilter_base(CF__POA.Resource, Resource):
                                               )
             Type = simple_property(id_="Type",
                                    type_="string",
+                                   defvalue="lowpass",
                                    )
             Ripple = simple_property(id_="Ripple",
                                      type_="double",
