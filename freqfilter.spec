@@ -39,6 +39,7 @@ BuildRoot:      %{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
 
 BuildRequires:  redhawk-devel >= 1.10
 Requires:       redhawk >= 1.10
+Requires:       scipy
 
 # Interface requirements
 BuildRequires:  bulkioInterfaces
@@ -48,6 +49,8 @@ BuildArch: noarch
 
 %description
 Component %{name}
+ * Commit: __REVISION__
+ * Source Date/Time: __DATETIME__
 
 
 %prep
