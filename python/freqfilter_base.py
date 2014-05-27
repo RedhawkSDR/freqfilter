@@ -19,10 +19,12 @@
 # AUTO-GENERATED CODE.  DO NOT MODIFY!
 #
 # Source: freqfilter.spd.xml
-from ossie.cf import CF, CF__POA
+from ossie.cf import CF
+from ossie.cf import CF__POA
 from ossie.utils import uuid
 
 from ossie.resource import Resource
+from ossie.threadedcomponent import *
 from ossie.properties import simple_property
 from ossie.properties import simpleseq_property
 from ossie.properties import struct_property
@@ -31,34 +33,7 @@ import Queue, copy, time, threading
 from ossie.resource import usesport, providesport
 import bulkio
 
-NOOP = -1
-NORMAL = 0
-FINISH = 1
-class ProcessThread(threading.Thread):
-    def __init__(self, target, pause=0.0125):
-        threading.Thread.__init__(self)
-        self.setDaemon(True)
-        self.target = target
-        self.pause = pause
-        self.stop_signal = threading.Event()
-
-    def stop(self):
-        self.stop_signal.set()
-
-    def updatePause(self, pause):
-        self.pause = pause
-
-    def run(self):
-        state = NORMAL
-        while (state != FINISH) and (not self.stop_signal.isSet()):
-            state = self.target()
-            delay = 1e-6
-            if (state == NOOP):
-                # If there was no data to process sleep to avoid spinning
-                delay = self.pause
-            time.sleep(delay)
-
-class freqfilter_base(CF__POA.Resource, Resource):
+class freqfilter_base(CF__POA.Resource, Resource, ThreadedComponent):
         # These values can be altered in the __init__ of your derived class
 
         PAUSE = 0.0125 # The amount of time to sleep if process return NOOP
@@ -68,62 +43,31 @@ class freqfilter_base(CF__POA.Resource, Resource):
         def __init__(self, identifier, execparams):
             loggerName = (execparams['NAME_BINDING'].replace('/', '.')).rsplit("_", 1)[0]
             Resource.__init__(self, identifier, execparams, loggerName=loggerName)
-            self.threadControlLock = threading.RLock()
-            self.process_thread = None
+            ThreadedComponent.__init__(self)
+
             # self.auto_start is deprecated and is only kept for API compatibility
             # with 1.7.X and 1.8.0 components.  This variable may be removed
             # in future releases
             self.auto_start = False
-
-        def initialize(self):
-            Resource.initialize(self)
-            
             # Instantiate the default implementations for all ports on this component
             self.port_dataFloat_in = bulkio.InFloatPort("dataFloat_in", maxsize=self.DEFAULT_QUEUE_SIZE)
             self.port_dataFloat_out = bulkio.OutFloatPort("dataFloat_out")
 
         def start(self):
-            self.threadControlLock.acquire()
-            try:
-                Resource.start(self)
-                if self.process_thread == None:
-                    self.process_thread = ProcessThread(target=self.process, pause=self.PAUSE)
-                    self.process_thread.start()
-            finally:
-                self.threadControlLock.release()
-
-
-        def process(self):
-            """The process method should process a single "chunk" of data and then return.  This method will be called
-            from the processing thread again, and again, and again until it returns FINISH or stop() is called on the
-            component.  If no work is performed, then return NOOP"""
-            raise NotImplementedError
+            Resource.start(self)
+            ThreadedComponent.startThread(self, pause=self.PAUSE)
 
         def stop(self):
-            self.threadControlLock.acquire()
-            try:
-                process_thread = self.process_thread
-                self.process_thread = None
-
-                if process_thread != None:
-                    process_thread.stop()
-                    process_thread.join(self.TIMEOUT)
-                    if process_thread.isAlive():
-                        raise CF.Resource.StopError(CF.CF_NOTSET, "Processing thread did not die")
-                Resource.stop(self)
-            finally:
-                self.threadControlLock.release()
+            if not ThreadedComponent.stopThread(self, self.TIMEOUT):
+                raise CF.Resource.StopError(CF.CF_NOTSET, "Processing thread did not die")
+            Resource.stop(self)
 
         def releaseObject(self):
             try:
                 self.stop()
             except Exception:
                 self._log.exception("Error stopping")
-            self.threadControlLock.acquire()
-            try:
-                Resource.releaseObject(self)
-            finally:
-                self.threadControlLock.release()
+            Resource.releaseObject(self)
 
         ######################################################################
         # PORTS
@@ -152,8 +96,8 @@ class freqfilter_base(CF__POA.Resource, Resource):
                                action="external",
                                kinds=("configure",),
                                description=""""a" represents the "IIR" part
-                               Set a = [1] for a purely FIR filter implementation"""
-                               )
+                               Set a = [1] for a purely FIR filter implementation""")
+        
         b = simpleseq_property(id_="b",
                                type_="float",
                                defvalue=None,
@@ -163,32 +107,31 @@ class freqfilter_base(CF__POA.Resource, Resource):
                                kinds=("configure",),
                                description=""""b" represents the "FIR" part.
                                Set b = [1] for a purely IIR filter implementation
-                               """
-                               )
+                               """)
+        
         class FilterProps(object):
             TransitionWidth = simple_property(id_="TransitionWidth",
                                               type_="double",
-                                              defvalue=800.0,
-                                              )
+                                              defvalue=800.0)
+        
             Type = simple_property(id_="Type",
                                    type_="string",
-                                   defvalue="lowpass",
-                                   )
+                                   defvalue="lowpass")
+        
             Ripple = simple_property(id_="Ripple",
                                      type_="double",
-                                     defvalue=0.01,
-                                     )
+                                     defvalue=0.01)
+        
             freq1 = simple_property(id_="freq1",
                                     type_="double",
-                                    defvalue=1000.0,
-                                    )
+                                    defvalue=1000.0)
+        
             freq2 = simple_property(id_="freq2",
                                     type_="double",
-                                    defvalue=2000.0,
-                                    )
+                                    defvalue=2000.0)
+        
             filterComplex = simple_property(id_="filterComplex",
-                                            type_="boolean",
-                                            )
+                                            type_="boolean")
         
             def __init__(self, **kw):
                 """Construct an initialized instance of this struct definition"""
@@ -217,11 +160,11 @@ class freqfilter_base(CF__POA.Resource, Resource):
         
             def getMembers(self):
                 return [("TransitionWidth",self.TransitionWidth),("Type",self.Type),("Ripple",self.Ripple),("freq1",self.freq1),("freq2",self.freq2),("filterComplex",self.filterComplex)]
-
+        
         filterProps = struct_property(id_="filterProps",
                                       structdef=FilterProps,
                                       configurationkind=("configure",),
                                       mode="readwrite",
-                                      description="""Configure this property to use the internal filter designer to create your filter coefficients."""
-                                      )
+                                      description="""Configure this property to use the internal filter designer to create your filter coefficients.""")
+        
 
