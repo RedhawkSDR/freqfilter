@@ -116,7 +116,7 @@ class freqfilter_base(CF__POA.Resource, Resource, ThreadedComponent):
         
             Type = simple_property(id_="Type",
                                    type_="string",
-                                   defvalue="lowpass")
+                                   defvalue="highpass")
         
             Ripple = simple_property(id_="Ripple",
                                      type_="double",
@@ -124,14 +124,15 @@ class freqfilter_base(CF__POA.Resource, Resource, ThreadedComponent):
         
             freq1 = simple_property(id_="freq1",
                                     type_="double",
-                                    defvalue=1000.0)
+                                    defvalue=0.0)
         
             freq2 = simple_property(id_="freq2",
                                     type_="double",
-                                    defvalue=2000.0)
+                                    defvalue=0.0)
         
             filterComplex = simple_property(id_="filterComplex",
-                                            type_="boolean")
+                                            type_="boolean",
+                                            defvalue=False)
         
             def __init__(self, **kw):
                 """Construct an initialized instance of this struct definition"""

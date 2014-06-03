@@ -211,6 +211,10 @@ class ComponentTests(ossie.utils.testing.ScaComponentTestCase, ImpulseResponseMi
             return
         raise RunTimeError("No error raised in testBadCfg1")
 
+    def testNoCfg(self):
+        """Validate component doesn't fail miserably without any configuration
+        """
+        self.main([self.INPUT])
     
     #the first four tests are designed to work in pairs
     #make random taps & input data and send it all through
@@ -261,7 +265,22 @@ class ComponentTests(ossie.utils.testing.ScaComponentTestCase, ImpulseResponseMi
             ComponentTests.CXOUT = self.output
         else:
             self.assertTrue(ComponentTests.CXOUT==self.output)
-
+    
+    def testAllRealDefaultConfig(self):
+        """Real test part 1 with default config (No Filtering)
+        """
+        self.main([self.INPUT])
+        if ComponentTests.REALOUT ==None:
+            ComponentTests.REALOUT = self.output
+        else:
+            a = self.INPUT
+            b = self.output
+            tolerance = 0.01
+            diffs = map(lambda a,b:a-b,a,b)
+            # Check that every value is within the tolerance
+            for diff in diffs:
+              self.assertTrue(diff < tolerance)
+    
     def testImpulseIIROneAtATime(self):
         """send in one input at a time to make sure that the filter is doing its state updates properly
            Not very efficient filtering but a good test case
@@ -483,6 +502,13 @@ class ComponentTests(ossie.utils.testing.ScaComponentTestCase, ImpulseResponseMi
         else:
             return [math.sin(2*math.pi*f*i) for i in xrange(NumPts)]
             
+    def validateSRIPushing(self, sampleRate=1.0, streamID='test_stream'):
+        self.assertEqual(self.sink.sri().streamID, streamID, "Component not pushing streamID properly")
+        # Account for rounding error
+        calcSR = 1/self.sink.sri().xdelta
+        diffSR = abs(calcSR-sampleRate)
+        tolerance = 1
+        self.assertTrue(diffSR < tolerance, "Component not pushing samplerate properly")
 
     def main(self,inData=[], dataCx=False,eos=False, streamID="test_stream", sampleRate=1.0):
         """The main engine for all the test cases - configure the equation, push data, and get output

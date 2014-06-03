@@ -11,3 +11,4 @@ configure
 install-sh
 ltmain.sh
 missing
+*/*.pyc
